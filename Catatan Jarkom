@@ -1,0 +1,385 @@
+A.HTTP SERVER
+
+STEP 1: Atur IP Statik di kazdel
+STEP 2: Install nginx
+
+$ echo "nameserver 8.8.8.8" > /etc/resolv.conf
+$ apk update
+$ apk add nginx
+
+STEP 3: Buat struktur directory
+
+$ mkdir -p /root/myconfig
+$ mkdir -p /root/myweb
+$ mkdir -p /root/mylogs
+
+Step 4: Buat file "indeks.html" di /root/myweb
+
+<html>
+<head>
+<title>This is My Web</title>
+</head>
+<body>
+<p>
+This is my web
+</p>
+</body>
+</html>
+
+Step 5:Buat file "nginx.conf" di /root/myconfig
+
+user root;
+worker_processes auto;
+worker_cpu_affinity auto;
+pid /tmp/nginx.pid;
+error_log /root/mylogs/error.log;
+ 
+events { worker_connections 768; }
+ 
+http {
+    server {
+        listen 80;
+        server_name _;
+ 
+        root /root/myweb;
+        index index.html;
+ 
+        location / {
+            try_files $uri $uri/ =404;
+        }
+    }
+}
+
+Step 6:Buat file "start_http.sh" di /root/myconfig:
+#!/bin/bash
+ 
+nginx -c /root/myconfig/nginx.conf -g 'daemon off;'
+
+
+Step 7: Berikan izin eksekusi buat file “start_http.sh”:
+
+$ chmod +x start_http.sh
+
+Step 8:Jalankan web server dengan perintah:
+$ ./start_http.sh
+
+B.DNS Server
+
+STEP 1: setup ip statis Chenoborg
+STEP 2:Buat struktur direktori:
+$ mkdir -p /root/dns
+$ mkdir -p /root/dnsdata
+
+STEP 3: Install Bind
+$ echo "nameserver 8.8.8.8" > /etc/resolv.conf
+$ apk update
+$ apk add bind
+
+STEP 4:Buat file "named.conf" di /root/dns:
+
+
+options {
+    directory "/root/dns";
+    listen-on { any; };
+    allow-query { any; };
+};
+
+logging {
+    channel default_log {
+        file "/root/dns/named.log" versions 3 size 5m;
+        severity info;
+        print-time yes;
+        print-severity yes;
+        print-category yes;
+    };
+
+    category default { default_log; };
+    category queries { default_log; };
+};
+ 
+zone "localhost" {
+    type master;
+    file "db.localhost";
+};
+ 
+zone "netics.my.id" {
+    type master;
+    file "db.netics.my.id";
+};
+
+
+STEP 5: Buat file "db.localhost":
+
+$TTL 86400
+@ IN SOA localhost. root.localhost. (
+    1       ; serial
+    3600    ; refresh
+    1800    ; retry
+    604800  ; expire
+    86400 ) ; minimum
+ 
+  IN NS localhost.
+  IN A 127.0.0.1
+
+STEP 6:Buat file "db.netics.my.id", memetakan "www.netics.my.id" ke IP web server (Kazdel):
+
+$TTL 86400
+@ IN SOA ns1.netics.my.id. admin.netics.my.id. (
+    1       ; serial
+    3600    ; refresh
+    1800    ; retry
+    604800  ; expire
+    86400 ) ; minimum
+ 
+  IN NS ns1.netics.my.id.
+ns1 IN A [IP Prefix].200.12
+www IN A [IP Prefix].200.11
+
+STEP 7:Buat file "start_dns.sh" di /root/dns dan jalankan dns servernya:
+
+#!/bin/sh
+ 
+named -g -c /root/dns/named.conf
+
+*Untuk melihat progress/aktivitas dari DNS Server, pantaulah di file /root/dns/named.log (gunakan tmux), dengan perintah:
+$ tail -f /root/dns/named.log
+
+
+Langkah Kerja, Integrasi dengan DHCP:
+Agar seluruh client otomatis mengetahui alamat DNS server tanpa perlu diset manual satu per satu:
+
+
+STEP 8:Edit file "dhcpd.conf" pada DHCP server yang sudah ada, tambahkan baris:
+
+option dns [IP Prefix].200.12 8.8.8.8
+
+STEP 9:Reload kembali DHCP server, lalu restart seluruh client agar setting DNS otomatis ter-set.
+
+*Indikator Keberhasilan:
+Di Sargon, cek /etc/resolv.conf:
+
+$ cat /etc/resolv.conf
+
+Lakukan ping dan curl memakai nama domain (bukan IP):
+
+$ ping www.netics.my.id
+$ curl -vL http://www.netics.my.id
+
+Dari Ognisko, akses "http://www.netics.my.id" lewat Firefox
+
+
+
+Problem B.2 - Multi-Zone DNS dan Multi-Domain Web Server
+
+Langkah Kerja, DNS Server (Chernobog):
+
+
+STEP 1:Tambahkan definisi zona baru di "named.conf":
+
+
+zone "netics.org" {
+    type master;
+    file "db.netics.org";
+};
+
+
+STEP 2:
+$TTL 86400
+@ IN SOA ns1.netics.org. admin.netics.org. (
+    1       ; serial
+    3600    ; refresh
+    1800    ; retry
+    604800  ; expire
+    86400 ) ; minimum
+ 
+  IN NS ns1.netics.org.
+ns1 IN A [IP Prefix].200.12
+web IN A [IP Prefix].200.11
+
+STEP 3:Restart node Chernobog (stop lalu start kembali) agar konfigurasi baru terbaca.
+STEP 4:Sebagai indikator keberhasilan, cek dari Sargon dan yang lain dengan ping ke ns1.netics.org.
+$ping ns1.netics.org
+
+Langkah Kerja, Web Server (Kazdel):
+
+STEP 1:Buat direktori baru untuk konten web.netics.org:
+$ mkdir -p /root/myweb-netics-org
+
+
+STEP 2:Buat file "index.html" di direktori tersebut:
+
+<html>
+<head>
+<title>Hello</title>
+</head>
+<body>
+<p>
+This is NETICS-ORG web
+</p>
+</body>
+</html>
+
+
+STEP 3:Ubah blok http pada "nginx.conf" agar melayani dua nama domain sekaligus dari root direktori yang berbeda:
+
+http {
+    server {
+        listen 80;
+        server_name www.netics.my.id;
+ 
+        root /root/myweb;
+        index index.html;
+ 
+        location / {
+            try_files $uri $uri/ =404;
+        }
+    }
+ 
+    server {
+        listen 80;
+        server_name web.netics.org;
+ 
+        root /root/myweb-netics-org;
+        index index.html;
+ 
+        location / {
+            try_files $uri $uri/ =404;
+        }
+    }
+}
+
+STEP 4:Restart node Kazdel (stop lalu start kembali).
+STEP 5:Dari Iberia (atau client lain):
+
+$ curl -vL http://www.netics.my.id
+$ curl -vL http://web.netics.org
+
+
+
+C.Reverse Proxy
+
+Langkah Kerja, Web1 (web1):
+
+STEP 1 : Setup ip statis web1
+STEP 2:Buat struktur direktori (myconfig, myweb, mylogs) seperti Bagian A.
+STEP 3:Jalankan command yang sama untuk instalasi nginx seperti pada bagian A.
+STEP 4:Buat "index.html" seperti yang ada pada bagian A tapi berisi teks "Ini WEB-1" .
+STEP 5:Buat "nginx.conf" seperti yang ada pada bagian A, dan modifikasi blok http, kali ini nginx listen di port 8080 (bukan 80):
+
+
+http {
+    server {
+        listen 8080;
+        server_name _;
+ 
+        root /root/myweb;
+        index index.html;
+ 
+        location / {
+            try_files $uri $uri/ =404;
+        }
+    }
+}
+
+STEP 6:Buat "start_http.sh" seperti yang ada di bagian A sebelumnya, dan set start command node.
+STEP 7:Restart node Web1, verifikasi dari Sargon dan Ognisko
+
+$ curl http://[IP Prefix].200.20:8080
+
+
+
+Langkah Kerja, Web2 (web2):
+Ulangi langkah yang sama persis seperti Web1, dengan perbedaan:
+IP address [IP Prefix].200.21/24.
+Isi "index.html": "Ini WEB2-2".
+
+STEP 3:Isi "nginx.conf" dan "start_http.sh" identik dengan Web1 (hanya root/direktori yang menyesuaikan /root/myweb milik Web2 sendiri).
+STEP 4:Restart node Web2, verifikasi dari Sargon dan Ognisko:
+
+$ curl http://[IP Prefix].200.21:8080
+
+
+Langkah Kerja, Reverse Proxy (Kazdel):
+STEP 1:Ubah "nginx.conf" di /root/myconfig menjadi konfigurasi reverse proxy (menggantikan konfigurasi Bagian A/B):
+
+
+http {
+    server {
+        listen 80;
+        server_name www.netics.my.id;
+ 
+        location = /web1 {
+            proxy_pass http://[IP Prefix].200.20:8080/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+ 
+        location = /web2 {
+            proxy_pass http://[IP Prefix].200.21:8080/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+}
+
+STEP 2:Restart node Kazdel.
+
+Dari sargon:
+
+$ curl http://www.netics.my.id/web1
+$ curl http://www.netics.my.id/web2
+
+
+Langkah Kerja, Aplikasi di Web2 (web2):
+STEP 1:Buat direktori baru:
+$ mkdir -p /root/aplikasi
+
+STEP 2:Install python menggunakan:
+$ echo "nameserver 8.8.8.8" > /etc/resolv.conf
+$ apk update
+$ apk add python3
+
+STEP 3:Buat file "program.py" pada direktori /root/aplikasi:
+STEP 4:Jalankan aplikasi:
+$ python3 /root/aplikasi/program.py
+
+STEP 5:Verifikasi awal dari Ognisko:
+$ curl http://[IP Prefix].200.21:5000
+
+
+Langkah Kerja, Reverse Proxy (Kazdel):
+
+STEP 1:Tambahkan satu blok location baru pada "nginx.conf":
+
+http {
+    server {
+        listen 80;
+        server_name www.netics.my.id;
+ 
+        location = /web1 {
+            proxy_pass http://[IP Prefix].200.20:8080/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+ 
+        location = /web2 {
+            proxy_pass http://[IP Prefix].200.21:8080/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+ 
+        location = /app {
+            proxy_pass http://[IP Prefix].200.21:5000/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+}
+
+STEP 2: restart node kazdel
+
+
+Dari Sargon:
+$ curl http://www.netics.my.id/web1
+$ curl http://www.netics.my.id/web2
+$ curl http://www.netics.my.id/app
